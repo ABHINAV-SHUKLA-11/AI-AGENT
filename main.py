@@ -44,6 +44,65 @@ if GEMINI_API_KEY:
 else:
     logger.info("GEMINI_API_KEY not set — running with rule-based agent only.")
 
+# ===== Razorpay setup (optional — sirf tab kaam karega jab keys set ho) =====
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+razorpay_client = None
+if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+    try:
+        import razorpay
+        razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        logger.info("Razorpay payments enabled (test mode key: %s...)", RAZORPAY_KEY_ID[:12])
+    except Exception as e:
+        logger.warning("Razorpay init failed, falling back to Cash on Delivery only: %s", e)
+        razorpay_client = None
+else:
+    logger.info("RAZORPAY_KEY_ID/SECRET not set — running with Cash on Delivery only.")
+
+
+def create_payment_link(order):
+    """Order ke liye Razorpay test-mode payment link banata hai.
+    Har money-action explainable rakhne ke liye poora attempt (success/failure)
+    payments table me audit trail ke roop me log hota hai — koi bhi step silently fail nahi hota."""
+    if not razorpay_client:
+        return {"ok": False, "reason": "razorpay_not_configured"}
+    try:
+        amount_paise = int(round(order["total"] * 1.18 * 100))  # GST 18% included, paise me
+        link = razorpay_client.payment_link.create({
+            "amount": amount_paise,
+            "currency": "INR",
+            "accept_partial": False,
+            "description": f"Order {order['order_id']} — {order['product']} x{order['quantity']}",
+            "customer": {"name": order["customer"]},
+            "notify": {"sms": False, "email": False},
+            "reference_id": order["order_id"],
+            "callback_method": "get",
+        })
+        get_db().payments.insert_one({
+            "order_id": order["order_id"],
+            "razorpay_link_id": link["id"],
+            "razorpay_link_url": link["short_url"],
+            "amount": amount_paise / 100,
+            "status": "created",
+            "created_at": datetime.now().isoformat(),
+        })
+        return {"ok": True, "url": link["short_url"], "link_id": link["id"]}
+    except Exception as e:
+        logger.error("Razorpay payment link creation failed: %s", e)
+        try:
+            get_db().payments.insert_one({
+                "order_id": order["order_id"],
+                "razorpay_link_id": "",
+                "razorpay_link_url": "",
+                "amount": order.get("total", 0),
+                "status": f"failed: {e}"[:250],
+                "created_at": datetime.now().isoformat(),
+            })
+        except Exception as log_err:
+            logger.error("Could not even log the payment failure: %s", log_err)
+        return {"ok": False, "reason": str(e)[:250]}
+
 
 def ask_gemini(user_message, products, orders):
     """Rule-based agent jo samajh na paye, uske liye Gemini se smart fallback jawaab."""
@@ -72,7 +131,7 @@ def ask_gemini(user_message, products, orders):
 
 # =====================================================================
 # Chhota MySQL wrapper — isse baaki poora code (agent logic, routes) bina
-# kisi change ke chal jaata hai, jaisa MongoDB collections ke saath chalta tha
+# kisi change ke chal jaata hai
 # (database.products.find(...), .insert_one(...), .update_one(...) waghera).
 # =====================================================================
 
@@ -121,7 +180,7 @@ class UpdateResult:
 
 
 class Table:
-    """MongoDB collection jaisa hi interface (find/find_one/insert_one/update_one/
+    """Simple collection-jaisa interface (find/find_one/insert_one/update_one/
     delete_one/delete_many), lekin peeche MySQL use karta hai."""
 
     def __init__(self, table_name, columns):
@@ -234,6 +293,10 @@ class Database:
             ["order_id", "customer", "product", "quantity", "status", "total",
              "payment_method", "payment_status", "created_at"],
         )
+        self.payments = Table(
+            "payments",
+            ["order_id", "razorpay_link_id", "razorpay_link_url", "amount", "status", "created_at"],
+        )
 
     def command(self, _cmd):
         conn = get_conn()
@@ -276,6 +339,20 @@ def _ensure_tables():
                     total FLOAT,
                     payment_method VARCHAR(50),
                     payment_status VARCHAR(50),
+                    created_at VARCHAR(50)
+                )"""
+            )
+            # Ye audit-trail table hai — Razorpay ke saath har payment attempt
+            # (success ya failure dono) yahan log hota hai, taaki har money
+            # action explainable ho.
+            cur.execute(
+                """CREATE TABLE IF NOT EXISTS payments (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    order_id VARCHAR(50),
+                    razorpay_link_id VARCHAR(100),
+                    razorpay_link_url VARCHAR(255),
+                    amount FLOAT,
+                    status VARCHAR(255),
                     created_at VARCHAR(50)
                 )"""
             )
@@ -384,6 +461,19 @@ def agent(msg_original, products, orders, database):
 
         tax = round(total * 0.18, 2)
         grand = round(total + tax, 2)
+
+        # Agar Razorpay configured hai to real (test-mode) payment link bhi bana do.
+        # Fail hone pe bhi order Cash-on-Delivery ke saath valid rehta hai — koi crash nahi.
+        payment_line = "- Payment : Cash on Delivery"
+        pay_result = create_payment_link(order)
+        if pay_result["ok"]:
+            order["payment_method"] = "razorpay"
+            database.orders.update_one(
+                {"order_id": order["order_id"]},
+                {"$set": {"payment_method": "razorpay"}}
+            )
+            payment_line = f"- Pay Now : {pay_result['url']}  (Razorpay test mode)"
+
         return (
             f"✅ Order Created!\n"
             f"- ID      : {order['order_id']}\n"
@@ -393,7 +483,7 @@ def agent(msg_original, products, orders, database):
             f"- Subtotal: ${total}\n"
             f"- GST 18% : ${tax}\n"
             f"- Total   : ${grand}\n"
-            f"- Payment : Cash on Delivery\n"
+            f"{payment_line}\n"
             f"- Status  : Processing\n"
             f"- Stock Left: {available_stock - quantity} units"
         )
@@ -470,6 +560,36 @@ def agent(msg_original, products, orders, database):
             new_stock = matched_product["stock"] + qty
             return f"✅ {matched_product['name']} restocked!\n- Added: +{qty} units\n- New Stock: {new_stock} units"
         return "Specify product name and quantity. (e.g. 'restock Nike Air Max 50')"
+
+    # 4B. ADD PRODUCT — generic filters (jaise CATEGORY FILTER) se PEHLE check hona
+    # zaroori hai, warna "add product ... category clothing" jaisa command
+    # galti se category-filter se match ho jaata hai.
+    if re.search(r'add product|new product|create product', msg):
+        prod_name = re.search(r'(?:add|new|create)\s+product\s+(.+?)\s+price', msg_original, re.I)
+        price_match = re.search(r'price\s*\$?(\d+\.?\d*)', msg_original, re.I)
+        stock_match = re.search(r'stock\s+(\d+)', msg_original, re.I)
+        cat_match = re.search(r'category\s+(\w+)', msg_original, re.I)
+
+        if not prod_name or not price_match:
+            return (
+                "❌ Format: add product [name] price [amount] stock [qty] category [type]\n"
+                "Example: add product Air Jordan price 400 stock 25 category shoes"
+            )
+
+        new_product = {
+            "name": prod_name.group(1).strip(),
+            "price": float(price_match.group(1)),
+            "stock": int(stock_match.group(1)) if stock_match else 0,
+            "category": cat_match.group(1).lower() if cat_match else "general"
+        }
+        database.products.insert_one(new_product)
+        return (
+            f"✅ Product Added!\n"
+            f"- Name    : {new_product['name']}\n"
+            f"- Price   : ${new_product['price']}\n"
+            f"- Stock   : {new_product['stock']} units\n"
+            f"- Category: {new_product['category']}"
+        )
 
     # 5. LOW STOCK
     if re.search(r'low stock|running low|stock alert|reorder', msg):
@@ -623,33 +743,7 @@ def agent(msg_original, products, orders, database):
                     return f"📦 {matched['name']}\n- Price: ${matched['price']}\n- Stock: {matched['stock']} units\n- Category: {matched.get('category','N/A')}\n- Rating: ⭐{matched['rating']} ({matched['reviews']} reviews)"
         return "Product not found. Type 'show all products' to see available items."
 
-    # 17C. ADD PRODUCT (Admin only)
-    if re.search(r'add product|new product|create product', msg):
-        prod_name = re.search(r'(?:add|new|create)\s+product\s+(.+?)\s+price', msg_original, re.I)
-        price_match = re.search(r'price\s*\$?(\d+\.?\d*)', msg_original, re.I)
-        stock_match = re.search(r'stock\s+(\d+)', msg_original, re.I)
-        cat_match = re.search(r'category\s+(\w+)', msg_original, re.I)
-
-        if not prod_name or not price_match:
-            return (
-                "❌ Format: add product [name] price [amount] stock [qty] category [type]\n"
-                "Example: add product Air Jordan price 400 stock 25 category shoes"
-            )
-
-        new_product = {
-            "name": prod_name.group(1).strip(),
-            "price": float(price_match.group(1)),
-            "stock": int(stock_match.group(1)) if stock_match else 0,
-            "category": cat_match.group(1).lower() if cat_match else "general"
-        }
-        database.products.insert_one(new_product)
-        return (
-            f"✅ Product Added!\n"
-            f"- Name    : {new_product['name']}\n"
-            f"- Price   : ${new_product['price']}\n"
-            f"- Stock   : {new_product['stock']} units\n"
-            f"- Category: {new_product['category']}"
-        )
+    # 17. HELLO/HELP moves later; ADD PRODUCT relocated above (before generic filters)
 
     # 17A. PAYMENT METHOD
     if re.search(r'payment method|how to pay|payment options|pay by|payment mode', msg):
@@ -805,6 +899,59 @@ def update_order(order_id):
     try:
         get_db().orders.update_one({"order_id": order_id}, {"$set": request.get_json()})
         return {"status": "success", "message": "Updated"}, 200
+    except Exception as e:
+        return {"status": "error", "message": str(e)}, 500
+
+@app.route('/razorpay/webhook', methods=['POST'])
+def razorpay_webhook():
+    """Razorpay se real-time payment confirmation. Signature verify hoti hai
+    taaki koi fake request order status change na kar paaye (gated action)."""
+    try:
+        payload = request.get_data(as_text=True)
+        signature = request.headers.get("X-Razorpay-Signature", "")
+
+        if RAZORPAY_WEBHOOK_SECRET:
+            try:
+                razorpay_client.utility.verify_webhook_signature(
+                    payload, signature, RAZORPAY_WEBHOOK_SECRET
+                )
+            except Exception:
+                logger.warning("Razorpay webhook signature verify failed — request ignored.")
+                return {"status": "error", "message": "invalid signature"}, 400
+
+        data = json.loads(payload)
+        event = data.get("event", "")
+        link_entity = (
+            data.get("payload", {}).get("payment_link", {}).get("entity", {})
+        )
+        order_id = link_entity.get("reference_id")
+        link_status = link_entity.get("status", "")
+
+        if order_id:
+            get_db().payments.update_one(
+                {"razorpay_link_id": link_entity.get("id", "")},
+                {"$set": {"status": event}}
+            )
+            if event == "payment_link.paid":
+                get_db().orders.update_one(
+                    {"order_id": order_id},
+                    {"$set": {"payment_status": "paid"}}
+                )
+                logger.info("Order %s marked PAID via Razorpay webhook.", order_id)
+            elif event in ("payment_link.expired", "payment_link.cancelled"):
+                logger.info("Order %s payment %s.", order_id, link_status)
+
+        return {"status": "ok"}, 200
+    except Exception as e:
+        logger.error("Webhook processing failed: %s", e, exc_info=True)
+        return {"status": "error", "message": str(e)}, 500
+
+@app.route('/payments/<order_id>', methods=['GET'])
+def get_payment_status(order_id):
+    """Ek order ke saare payment attempts ka audit trail (success + failure sab)."""
+    try:
+        records = list(get_db().payments.find({"order_id": order_id}))
+        return {"status": "success", "order_id": order_id, "payments": records}, 200
     except Exception as e:
         return {"status": "error", "message": str(e)}, 500
 
