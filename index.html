@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Retail AI Agent — Abhinav Shukla</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏪</text></svg>">
+<meta name="description" content="Retail AI Agent — MYSQL + Gemini powered store assistant by Abhinav Shukla">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --kraft: #e7dcc2;
+    --kraft-dark: #d8c9a3;
+    --paper: #fbf8f0;
+    --ink: #241f16;
+    --ink-soft: #6b6353;
+    --green: #1f5c46;
+    --green-dark: #163f31;
+    --gold: #b9822c;
+    --brick: #a3392b;
+    --line: #d9cca4;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    font-family:'IBM Plex Sans',sans-serif;
+    background:
+      radial-gradient(circle at 1px 1px, rgba(36,31,22,0.06) 1px, transparent 0) 0 0/16px 16px,
+      var(--kraft);
+    color:var(--ink);
+    min-height:100vh;
+  }
+
+  /* ===== Header — signboard ===== */
+  .header{
+    background:var(--green);
+    background-image:linear-gradient(180deg, var(--green) 0%, var(--green-dark) 100%);
+    padding:18px 28px;
+    display:flex;align-items:center;justify-content:space-between;
+    box-shadow:0 3px 0 rgba(0,0,0,0.12);
+    position:relative;
+  }
+  .header::after{
+    content:'';position:absolute;left:0;right:0;bottom:-6px;height:6px;
+    background-image:linear-gradient(135deg, var(--green-dark) 25%, transparent 25%),
+                      linear-gradient(225deg, var(--green-dark) 25%, transparent 25%);
+    background-size:12px 12px;background-position:0 0;
+  }
+  .logo{display:flex;align-items:center;gap:12px;}
+  .logo-icon{
+    width:40px;height:40px;background:var(--gold);border-radius:6px;
+    display:flex;align-items:center;justify-content:center;font-size:19px;
+    box-shadow:inset 0 0 0 2px rgba(255,255,255,0.35);
+  }
+  .logo-text{font-family:'Zilla Slab',serif;font-weight:700;font-size:19px;color:var(--paper);letter-spacing:0.2px;}
+  .logo-sub{font-size:11.5px;color:#cfe3d8;font-family:'IBM Plex Mono',monospace;letter-spacing:0.4px;margin-top:2px;}
+  .status-badge{
+    display:flex;align-items:center;gap:7px;font-size:12px;color:#eafff2;
+    background:rgba(255,255,255,0.1);padding:6px 14px;border-radius:20px;
+    font-family:'IBM Plex Mono',monospace;letter-spacing:0.3px;
+    border:1px solid rgba(255,255,255,0.18);
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:#5be08a;animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}}
+
+  .main{display:grid;grid-template-columns:1fr 360px;gap:20px;padding:26px;max-width:1140px;margin:0 auto;}
+  @media (max-width:860px){.main{grid-template-columns:1fr;}}
+
+  /* ===== Metric tags ===== */
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
+  .tag{
+    position:relative;background:var(--paper);
+    border:1px solid var(--line);
+    border-radius:2px 10px 10px 2px;
+    padding:16px 16px 14px 22px;
+    box-shadow:2px 3px 0 rgba(36,31,22,0.08);
+  }
+  .tag::before{
+    content:'';position:absolute;left:9px;top:50%;transform:translateY(-50%);
+    width:7px;height:7px;border-radius:50%;background:var(--kraft);
+    box-shadow:inset 0 0 0 1px var(--ink-soft);
+  }
+  .tag-label{font-size:11px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;}
+  .tag-value{font-family:'Zilla Slab',serif;font-size:26px;font-weight:700;color:var(--green-dark);}
+
+  /* ===== Panels ===== */
+  .panel{background:var(--paper);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:2px 3px 0 rgba(36,31,22,0.06);}
+  .panel-header{
+    padding:13px 16px;border-bottom:1px dashed var(--line);
+    display:flex;align-items:center;gap:8px;background:rgba(31,92,70,0.03);
+  }
+  .panel-title{font-family:'Zilla Slab',serif;font-size:15px;font-weight:700;color:var(--green-dark);}
+
+  .products-list,.orders-list{padding:8px;max-height:280px;overflow-y:auto;}
+  .product-item{display:flex;align-items:center;justify-content:space-between;padding:10px 10px;border-radius:6px;margin-bottom:2px;}
+  .product-item:hover{background:var(--kraft);}
+  .product-item + .product-item{border-top:1px dotted var(--line);}
+  .product-name{font-size:13.5px;font-weight:600;}
+  .product-cat{font-size:11px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;}
+  .price{font-family:'IBM Plex Mono',monospace;font-weight:600;color:var(--green-dark);}
+  .stock-badge{font-size:10.5px;padding:2px 8px;border-radius:5px;background:#e6f1ea;color:var(--green);font-family:'IBM Plex Mono',monospace;}
+
+  .order-item{padding:10px 12px;border-radius:6px;margin-bottom:6px;border:1px solid var(--line);background:#fffefb;}
+  .order-top{display:flex;justify-content:space-between;margin-bottom:3px;}
+  .order-status{font-size:10.5px;padding:2px 9px;border-radius:5px;background:#faf1de;color:var(--gold);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;}
+  .order-meta{font-size:11.5px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;}
+
+  /* ===== Chat — receipt roll ===== */
+  .chat-panel{display:flex;flex-direction:column;height:560px;position:relative;margin-top:6px;}
+  .chat-panel .panel-header{background:var(--green-dark);border-bottom:none;}
+  .chat-panel .panel-title{color:var(--paper);}
+  .chat-panel::before{
+    content:'';position:absolute;top:47px;left:0;right:0;height:9px;z-index:2;
+    background-image:radial-gradient(circle at 7px 0, var(--kraft) 7px, transparent 7.5px);
+    background-size:14px 9px;background-repeat:repeat-x;background-position:0 -1px;
+  }
+  .chat-messages{flex:1;overflow-y:auto;padding:16px 12px 12px;display:flex;flex-direction:column;gap:10px;background:
+    repeating-linear-gradient(180deg, transparent 0 34px, rgba(36,31,22,0.025) 34px 35px);}
+  .msg{max-width:88%;padding:10px 13px;border-radius:8px;font-size:13px;line-height:1.55;}
+  .msg-bot{background:var(--paper);border:1px solid var(--line);align-self:flex-start;font-family:'IBM Plex Mono',monospace;font-size:12.5px;white-space:pre-wrap;}
+  .msg-user{background:var(--green);color:#eafff2;align-self:flex-end;font-weight:500;}
+  .typing{display:flex;gap:4px;padding:12px;}
+  .typing span{width:6px;height:6px;border-radius:50%;background:var(--ink-soft);animation:bounce 1.2s infinite;}
+  .typing span:nth-child(2){animation-delay:0.2s;}
+  .typing span:nth-child(3){animation-delay:0.4s;}
+  @keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
+  .chat-input-area{padding:12px;border-top:1px dashed var(--line);display:flex;gap:8px;background:var(--paper);}
+  .chat-input{flex:1;padding:9px 13px;font-size:13px;font-family:'IBM Plex Sans',sans-serif;border:1px solid var(--line);border-radius:8px;outline:none;background:#fff;}
+  .chat-input:focus{border-color:var(--green);}
+  .send-btn{width:36px;height:36px;border-radius:8px;background:var(--green);border:none;cursor:pointer;color:#eafff2;font-size:15px;}
+  .send-btn:hover{background:var(--green-dark);}
+  .quick-btns{padding:0 12px 10px;display:flex;flex-wrap:wrap;gap:6px;}
+  .quick-btn{font-size:11px;padding:5px 11px;border:1px solid var(--line);border-radius:14px;background:transparent;color:var(--ink-soft);cursor:pointer;font-family:'IBM Plex Mono',monospace;}
+  .quick-btn:hover{background:var(--kraft);color:var(--ink);}
+  .print-btn{margin-top:9px;padding:7px 15px;background:var(--gold);color:#241f16;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;display:block;}
+  .print-btn:hover{background:#a5761f;}
+
+  /* ===== Polish: entrance animation + hover lift + skeleton loading ===== */
+  .panel,.tag{animation:riseIn 0.45s ease both;}
+  .panel:nth-of-type(2){animation-delay:0.06s;}
+  .chat-panel{animation-delay:0.1s;}
+  @keyframes riseIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .panel{transition:box-shadow 0.2s ease, transform 0.2s ease;}
+  .panel:hover{box-shadow:3px 5px 0 rgba(36,31,22,0.09);}
+  .tag{transition:transform 0.15s ease;}
+  .tag:hover{transform:translateY(-2px);}
+  .product-item,.order-item{transition:background 0.15s ease, transform 0.15s ease;}
+  .order-item:hover{transform:translateX(2px);border-color:var(--gold);}
+  .skeleton{height:14px;border-radius:4px;margin:8px 10px;background:linear-gradient(90deg,var(--kraft) 25%,var(--kraft-dark) 37%,var(--kraft) 63%);background-size:400% 100%;animation:shimmer 1.4s ease infinite;}
+  @keyframes shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+  .empty-state{padding:22px 12px;text-align:center;color:var(--ink-soft);font-size:12.5px;font-family:'IBM Plex Mono',monospace;}
+  ::-webkit-scrollbar{width:8px;height:8px;}
+  ::-webkit-scrollbar-thumb{background:var(--kraft-dark);border-radius:8px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">
+    <div class="logo-icon">🏪</div>
+    <div>
+      <div class="logo-text">Retail AI Agent</div>
+      <div class="logo-sub">ABHINAV SHUKLA · MONGODB + GEMINI</div>
+    </div>
+  </div>
+  <div class="status-badge"><div class="dot"></div>SYSTEM LIVE</div>
+</div>
+<div class="main">
+  <div>
+    <div class="metrics">
+      <div class="tag"><div class="tag-label">Products</div><div class="tag-value" id="prod-count">–</div></div>
+      <div class="tag"><div class="tag-label">Orders</div><div class="tag-value" id="order-count">–</div></div>
+      <div class="tag"><div class="tag-label">Revenue</div><div class="tag-value" id="revenue">–</div></div>
+    </div>
+    <div class="panel" style="margin-bottom:18px">
+      <div class="panel-header"><span class="panel-title">Product Inventory</span></div>
+      <div class="products-list" id="products-list">
+        <div class="skeleton" style="width:80%"></div>
+        <div class="skeleton" style="width:65%"></div>
+        <div class="skeleton" style="width:72%"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Recent Orders</span></div>
+      <div class="orders-list" id="orders-list">
+        <div class="skeleton" style="width:75%"></div>
+        <div class="skeleton" style="width:60%"></div>
+      </div>
+    </div>
+  </div>
+  <div class="panel chat-panel">
+    <div class="panel-header"><span class="panel-title">🤖 AI Agent Chat</span></div>
+    <div class="chat-messages" id="chat">
+      <div class="msg msg-bot">👋 Hello! I am your Retail AI Agent.
+
+Try:
+• show all products
+• revenue report
+• bill for John Doe
+• low stock alerts</div>
+    </div>
+    <div class="quick-btns">
+      <button class="quick-btn" onclick="sendMsg('show all products')">products</button>
+      <button class="quick-btn" onclick="sendMsg('show all orders')">orders</button>
+      <button class="quick-btn" onclick="sendMsg('revenue report')">revenue</button>
+      <button class="quick-btn" onclick="sendMsg('store dashboard')">dashboard</button>
+      <button class="quick-btn" onclick="sendMsg('low stock alerts')">low stock</button>
+      <button class="quick-btn" onclick="sendMsg('top rated products')">top rated</button>
+    </div>
+    <div class="chat-input-area">
+      <input class="chat-input" id="msg-input" placeholder="Ask anything..." onkeydown="if(event.key==='Enter')sendMsg()" />
+      <button class="send-btn" onclick="sendMsg()">➤</button>
+    </div>
+  </div>
+</div>
+<script>
+// Same origin se serve ho raha hai (Flask hi /ui aur /query dono handle karta hai),
+// isliye ye empty rakha hai — local aur Vercel dono pe automatically kaam karega.
+const API = '';
+const chat = document.getElementById('chat');
+
+// Load products
+fetch(API+'/products').then(r=>r.json()).then(d=>{
+  document.getElementById('prod-count').textContent = d.count || 0;
+  const list = document.getElementById('products-list');
+  list.innerHTML = d.products.map(p=>`
+    <div class="product-item">
+      <div>
+        <div class="product-name">${p.name}</div>
+        <div class="product-cat">${p.category||'General'}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="price">$${p.price}</div>
+        <span class="stock-badge">${p.stock} units</span>
+      </div>
+    </div>`).join('');
+});
+
+// Load orders + calculate revenue
+fetch(API+'/orders').then(r=>r.json()).then(d=>{
+  document.getElementById('order-count').textContent = d.orders.length || 0;
+  const revenue = d.orders.reduce((sum, o) => sum + (o.total || 0), 0);
+  document.getElementById('revenue').textContent = '$' + revenue.toFixed(2);
+  const list = document.getElementById('orders-list');
+  list.innerHTML = d.orders.map(o=>`
+    <div class="order-item">
+      <div class="order-top">
+        <span style="font-size:13px;font-weight:600">${o.customer||'Customer'}</span>
+        <span class="order-status">${o.status||'processing'}</span>
+      </div>
+      <div class="order-meta">${o.product||'Product'} x${o.quantity||1} · $${o.total||0}</div>
+    </div>`).join('') || '<div class="empty-state">No orders yet — try "create order for John product Nike Air Max qty 1"</div>';
+});
+
+function isBill(text) {
+  return text.includes('INVOICE') || text.includes('GRAND TOTAL') || text.includes('Bills for');
+}
+
+function printBill(billText) {
+  const clean = billText.replace(/<br>/g, '\n').replace(/<[^>]+>/g, '');
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Invoice - Retail AI Agent</title>
+  <style>
+    body { font-family: 'IBM Plex Mono', monospace; padding: 40px; max-width: 420px; margin: 0 auto; background:#fbf8f0; }
+    h2 { text-align: center; margin-bottom: 4px; font-family: 'Zilla Slab', serif; color:#163f31; }
+    h4 { text-align: center; color: #6b6353; margin-bottom: 20px; font-weight: 500; }
+    .bill { white-space: pre-wrap; font-size: 13px; line-height: 1.9; background: #fff; padding: 18px; border-radius: 8px; border:1px dashed #d9cca4; }
+    .footer { text-align: center; margin-top: 20px; color: #6b6353; font-size: 11px; }
+    .print-btn { width: 100%; padding: 12px; background: #1f5c46; color: #eafff2; border: none; cursor: pointer; font-size: 14px; border-radius: 6px; margin-top: 16px; font-weight:600; }
+    @media print { .print-btn { display: none; } }
+  </style>
+</head>
+<body>
+  <h2>🏪 Retail AI Agent</h2>
+  <h4>Abhinav Shukla</h4>
+  <div class="bill">${clean}</div>
+  <div class="footer">
+    <p>Powered by MongoDB + Gemini</p>
+    <p>Generated: ${new Date().toLocaleString()}</p>
+  </div>
+  <button class="print-btn" onclick="window.print()">🖨️ Print Invoice</button>
+</body>
+</html>`);
+  win.document.close();
+  win.focus();
+}
+
+function addMsg(text, isUser) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + (isUser ? 'msg-user' : 'msg-bot');
+  d.innerHTML = text.replace(/\n/g, '<br>');
+
+  if (!isUser && isBill(text)) {
+    const btn = document.createElement('button');
+    btn.className = 'print-btn';
+    btn.innerHTML = '🖨️ Print Invoice';
+    btn.onclick = () => printBill(d.innerHTML);
+    d.appendChild(btn);
+  }
+
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function sendMsg(preset) {
+  const input = document.getElementById('msg-input');
+  const msg = preset || input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  addMsg(msg, true);
+  const t = document.createElement('div');
+  t.className = 'typing'; t.id = 'typing';
+  t.innerHTML = '<span></span><span></span><span></span>';
+  chat.appendChild(t);
+  chat.scrollTop = chat.scrollHeight;
+  try {
+    const res = await fetch(API+'/query', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: msg})
+    });
+    const data = await res.json();
+    document.getElementById('typing')?.remove();
+    addMsg(data.response || 'Error', false);
+
+    // Refresh data after order operations
+    if (msg.toLowerCase().includes('create order') || msg.toLowerCase().includes('delete order')) {
+      setTimeout(() => location.reload(), 2000);
+    }
+  } catch(e) {
+    document.getElementById('typing')?.remove();
+    addMsg('Connection error. Please try again.', false);
+  }
+}
+</script>
+</body>
+</html>
