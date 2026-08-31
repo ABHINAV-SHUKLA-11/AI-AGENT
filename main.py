@@ -6,8 +6,6 @@ from pymysql.cursors import DictCursor
 from datetime import datetime
 from dotenv import load_dotenv
 
-# .env file se local environment variables load karo (Vercel pe ye no-op rahega,
-# kyunki wahan env vars dashboard/CLI se already set hote hain)
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
@@ -19,17 +17,16 @@ CORS(app)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.getenv("PORT", 8080))
 
-# ===== MySQL config =====
+
 MYSQL_HOST = os.getenv("MYSQL_HOST")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", 3306))
 MYSQL_USER = os.getenv("MYSQL_USER")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "retail_db")
-# Kuch managed hosts (PlanetScale, Aiven, TiDB Cloud) ko TLS chahiye hoti hai.
-# Free/local MySQL ke liye ise "false" hi rehne do.
+
 MYSQL_SSL = os.getenv("MYSQL_SSL", "false").lower() == "true"
 
-# ===== Gemini AI setup (optional — sirf tab kaam karega jab GEMINI_API_KEY set ho) =====
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 gemini_client = None
@@ -44,7 +41,7 @@ if GEMINI_API_KEY:
 else:
     logger.info("GEMINI_API_KEY not set — running with rule-based agent only.")
 
-# ===== Razorpay setup (optional — sirf tab kaam karega jab keys set ho) =====
+
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
@@ -68,7 +65,7 @@ def create_payment_link(order):
     if not razorpay_client:
         return {"ok": False, "reason": "razorpay_not_configured"}
     try:
-        amount_paise = int(round(order["total"] * 1.18 * 100))  # GST 18% included, paise me
+        amount_paise = int(round(order["total"] * 1.18 * 100))  # GST 18% included
         link = razorpay_client.payment_link.create({
             "amount": amount_paise,
             "currency": "INR",
@@ -128,12 +125,6 @@ def ask_gemini(user_message, products, orders):
         logger.error("Gemini call failed: %s", e)
         return None
 
-
-# =====================================================================
-# Chhota MySQL wrapper — isse baaki poora code (agent logic, routes) bina
-# kisi change ke chal jaata hai
-# (database.products.find(...), .insert_one(...), .update_one(...) waghera).
-# =====================================================================
 
 def get_conn():
     if not (MYSQL_HOST and MYSQL_USER and MYSQL_DATABASE):
@@ -342,9 +333,7 @@ def _ensure_tables():
                     created_at VARCHAR(50)
                 )"""
             )
-            # Ye audit-trail table hai — Razorpay ke saath har payment attempt
-            # (success ya failure dono) yahan log hota hai, taaki har money
-            # action explainable ho.
+         
             cur.execute(
                 """CREATE TABLE IF NOT EXISTS payments (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -462,8 +451,6 @@ def agent(msg_original, products, orders, database):
         tax = round(total * 0.18, 2)
         grand = round(total + tax, 2)
 
-        # Agar Razorpay configured hai to real (test-mode) payment link bhi bana do.
-        # Fail hone pe bhi order Cash-on-Delivery ke saath valid rehta hai — koi crash nahi.
         payment_line = "- Payment : Cash on Delivery"
         pay_result = create_payment_link(order)
         if pay_result["ok"]:
@@ -561,9 +548,6 @@ def agent(msg_original, products, orders, database):
             return f"✅ {matched_product['name']} restocked!\n- Added: +{qty} units\n- New Stock: {new_stock} units"
         return "Specify product name and quantity. (e.g. 'restock Nike Air Max 50')"
 
-    # 4B. ADD PRODUCT — generic filters (jaise CATEGORY FILTER) se PEHLE check hona
-    # zaroori hai, warna "add product ... category clothing" jaisa command
-    # galti se category-filter se match ho jaata hai.
     if re.search(r'add product|new product|create product', msg):
         prod_name = re.search(r'(?:add|new|create)\s+product\s+(.+?)\s+price', msg_original, re.I)
         price_match = re.search(r'price\s*\$?(\d+\.?\d*)', msg_original, re.I)
@@ -810,7 +794,6 @@ def agent(msg_original, products, orders, database):
             "Ask me anything!"
         )
 
-    # DEFAULT — agar koi rule match na ho to Gemini AI se natural jawaab try karo
     gemini_reply = ask_gemini(msg_original, products, orders)
     if gemini_reply:
         return gemini_reply
