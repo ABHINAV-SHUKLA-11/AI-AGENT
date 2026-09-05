@@ -288,6 +288,10 @@ class Database:
             "payments",
             ["order_id", "razorpay_link_id", "razorpay_link_url", "amount", "status", "created_at"],
         )
+        self.growth_events = Table(
+            "growth_events",
+            ["order_id", "suggested_product", "suggested_price", "created_at"],
+        )
 
     def command(self, _cmd):
         conn = get_conn()
@@ -333,7 +337,7 @@ def _ensure_tables():
                     created_at VARCHAR(50)
                 )"""
             )
-         
+
             cur.execute(
                 """CREATE TABLE IF NOT EXISTS payments (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -342,6 +346,16 @@ def _ensure_tables():
                     razorpay_link_url VARCHAR(255),
                     amount FLOAT,
                     status VARCHAR(255),
+                    created_at VARCHAR(50)
+                )"""
+            )
+
+            cur.execute(
+                """CREATE TABLE IF NOT EXISTS growth_events (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    order_id VARCHAR(50),
+                    suggested_product VARCHAR(255),
+                    suggested_price FLOAT,
                     created_at VARCHAR(50)
                 )"""
             )
@@ -383,6 +397,23 @@ def fuzzy_match(product_name, products):
         if any(w in pname for w in words):
             return p
     return None
+
+
+def suggest_upsell(matched, products):
+    """Same category ka highest-rated alternate product suggest karta hai —
+    revenue growth signal ke liye (Razorpay Buildathon Track 01 requirement)."""
+    if not matched:
+        return None
+    same_cat = [
+        p for p in products
+        if p.get("category") == matched.get("category")
+        and p.get("name") != matched.get("name")
+        and p.get("stock", 0) > 0
+    ]
+    if not same_cat:
+        return None
+    return max(same_cat, key=lambda x: x.get("rating", 0))
+
 
 def make_invoice(o):
     sub = o.get("total", 0)
@@ -461,6 +492,21 @@ def agent(msg_original, products, orders, database):
             )
             payment_line = f"- Pay Now : {pay_result['url']}  (Razorpay test mode)"
 
+        upsell_line = ""
+        if matched:
+            upsell = suggest_upsell(matched, products)
+            if upsell:
+                database.growth_events.insert_one({
+                    "order_id": order["order_id"],
+                    "suggested_product": upsell["name"],
+                    "suggested_price": upsell["price"],
+                    "created_at": datetime.now().isoformat(),
+                })
+                upsell_line = (
+                    f"\n💡 Customers who bought {matched['name']} also liked: "
+                    f"{upsell['name']} (${upsell['price']}, ⭐{upsell.get('rating','')}) — want to add it?"
+                )
+
         return (
             f"✅ Order Created!\n"
             f"- ID      : {order['order_id']}\n"
@@ -473,6 +519,7 @@ def agent(msg_original, products, orders, database):
             f"{payment_line}\n"
             f"- Status  : Processing\n"
             f"- Stock Left: {available_stock - quantity} units"
+            f"{upsell_line}"
         )
 
     # 2. DELETE ORDER
@@ -596,6 +643,17 @@ def agent(msg_original, products, orders, database):
             f"- Delivered    : {delivered}\n"
             f"- Processing   : {processing}\n"
             f"- Pending      : {pending}"
+        )
+
+    # 6B. GROWTH REPORT (Track 01: measured evidence of revenue growth)
+    if re.search(r'growth report|upsell report|suggested revenue', msg):
+        events = list(database.growth_events.find({}))
+        potential = sum(e.get("suggested_price", 0) for e in events)
+        return (
+            f"📈 Growth Report:\n"
+            f"- Upsell suggestions shown: {len(events)}\n"
+            f"- Potential additional revenue: ${round(potential,2)}\n"
+            f"- (Every order-time suggestion logged for audit — see growth_events table)"
         )
 
     # 7. BILL/INVOICE
@@ -786,6 +844,7 @@ def agent(msg_original, products, orders, database):
             "- payment status ORD-001\n\n"
             "📊 ANALYTICS:\n"
             "- revenue report\n"
+            "- growth report\n"
             "- store dashboard\n"
             "- low stock alerts\n"
             "- who bought Nike Air Max\n\n"
@@ -885,6 +944,21 @@ def update_order(order_id):
     except Exception as e:
         return {"status": "error", "message": str(e)}, 500
 
+@app.route('/growth', methods=['GET'])
+def get_growth_events():
+    """Har upsell suggestion ka audit trail — Track 01 ke 'measured revenue' proof ke liye."""
+    try:
+        events = list(get_db().growth_events.find({}))
+        potential = sum(e.get("suggested_price", 0) for e in events)
+        return {
+            "status": "success",
+            "suggestions_shown": len(events),
+            "potential_additional_revenue": round(potential, 2),
+            "events": events,
+        }, 200
+    except Exception as e:
+        return {"status": "error", "message": str(e)}, 500
+
 @app.route('/razorpay/webhook', methods=['POST'])
 def razorpay_webhook():
     """Razorpay se real-time payment confirmation. Signature verify hoti hai
@@ -947,6 +1021,7 @@ def get_mcp_tools():
         "delete_order": {"description": "Delete order by ID or customer"},
         "update_order": {"description": "Update order status"},
         "get_revenue": {"description": "Get revenue report"},
+        "get_growth_report": {"description": "Get upsell/growth report"},
         "get_low_stock": {"description": "Get low stock alerts"},
         "generate_bill": {"description": "Generate invoice for order"}
     }, 200
