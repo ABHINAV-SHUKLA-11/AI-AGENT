@@ -1,31 +1,82 @@
 # Retail AI Agent — Abhinav Shukla
 
-> Smart AI-powered retail management agent built for **Google Cloud Rapid Agent Hackathon 2026** — Brick-and-Mortar Retail Track.
+> Rule-based + Gemini-powered retail management agent for local shopkeepers, with Razorpay payment links.
+> Built for **Razorpay Buildathon**. Running locally (MySQL) for demo.
 
-##  Live Demo
-- **Frontend UI:** https://google-rapid-agent-retail-44551099700.europe-west1.run.app/ui
-- **API:** https://google-rapid-agent-retail-44551099700.europe-west1.run.app
+## What it does
 
-##  Author
-- **Abhinav Shukla**
+A chat-style agent (`/query`) that understands plain-language retail commands and falls back to
+Gemini 2.5 Flash for anything it doesn't recognize. Backed by MySQL, not MongoDB — every "collection"
+operation (`find`, `insert_one`, `update_one`, etc.) is actually translated to SQL under the hood via a
+small compatibility layer in `main.py` (`Table` / `Database` classes), so the agent logic can stay
+Mongo-style without touching a real MongoDB instance.
 
-##  Architecture
-User → Frontend UI → Google Cloud Run → MongoDB Atlas
-↑
-Google Agent Builder (Gemini 2.5 Flash)
-↑
-MongoDB MCP Server
+### Features
+- Product search, price filter, rating filter, category filter
+- Create / delete / update orders via natural language
+- Stock auto-decrement on order, auto-restore on delete/cancel
+- GST invoice generation (18%)
+- Revenue report & store dashboard
+- Low stock alerts, top-rated products, "who bought X"
+- **Razorpay test-mode payment links** on order creation, with webhook-based payment confirmation
+- Gemini 2.5 Flash fallback for anything the regex rules don't catch
 
-##  Features
-- Product search, price & rating filters
--  Order create, delete, update via chat
--  GST Invoice generation (18%)
--  Revenue reports & store analytics
--  Low stock alerts
--  Top rated products
+## Tech stack (actual, as run locally)
 
-## Example Commands
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python Flask (`main.py`) |
+| Database | MySQL (via PyMySQL — a Mongo-style shim sits on top, see `Table`/`Database` in `main.py`) |
+| AI fallback | Gemini 2.5 Flash (`google-genai` SDK) |
+| Payments | Razorpay Payment Links + Webhooks (test mode) |
+| Frontend | Static `index.html` served at `/ui` |
+| Server | Flask dev server locally; Gunicorn in `Dockerfile` (not used for this local demo) |
 
+> Note: `src/app.py`, `src/config.py`, `src/mongodb_mcp_server.py`, `src/models.py`, `src/deploy.py`
+> are leftovers from an earlier MongoDB + Google Agent Builder version and are **not used** by the
+> running app. `src/config.py` in particular is not valid Python right now (it has stray Markdown in
+> it) — don't import it. Only `main.py` matters for this build.
+
+## Setup (local)
+
+1. Create a MySQL database and note its host/user/password/db name.
+2. Create a `.env` file in the project root:
+   ```
+   MYSQL_HOST=localhost
+   MYSQL_PORT=3306
+   MYSQL_USER=your_user
+   MYSQL_PASSWORD=your_password
+   MYSQL_DATABASE=retail_db
+   MYSQL_SSL=false
+
+   GEMINI_API_KEY=your_gemini_key
+   GEMINI_MODEL=gemini-2.5-flash
+
+   RAZORPAY_KEY_ID=your_test_key_id
+   RAZORPAY_KEY_SECRET=your_test_key_secret
+   RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
+
+   PORT=8080
+   ```
+   All three integrations (MySQL, Gemini, Razorpay) degrade gracefully if their env vars are missing —
+   the agent still runs rule-based / Cash-on-Delivery only.
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   pip install razorpay
+   ```
+   **`razorpay` is used in `main.py` but is missing from `requirements.txt` — install it manually, or
+   add it to the file, or every order-creation call will throw on a fresh install.**
+4. Run:
+   ```bash
+   python main.py
+   ```
+   Tables (`products`, `orders`, `payments`) are auto-created on first run if they don't exist.
+5. Open `http://localhost:8080/ui` for the chat UI, or POST to `http://localhost:8080/query`.
+
+## Example commands
+
+```
 show all products
 products under $100
 top rated products
@@ -38,95 +89,28 @@ create order for Amit product Nike Air Max qty 2
 delete order Rahul Kumar
 mark ORD-001 as delivered
 who bought Nike Air Max
+payment status ORD-001
+```
 
-##  Tech Stack
-| Layer | Technology |
-|-------|-----------|
-| AI Agent | Google Agent Builder + Gemini 2.5 Flash |
-| Database | MongoDB Atlas |
-| MCP Server | MongoDB MCP Server |
-| Backend | Python Flask + PyMongo |
-| Deployment | Google Cloud Run (europe-west1) |
-| Frontend | HTML/CSS/JavaScript |
+## API endpoints
 
-##  API Endpoints
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | /ui | Frontend dashboard |
-| POST | /query | AI Agent chat |
-| GET | /products | List products |
-| POST | /products | Add product |
-| GET | /orders | List orders |
-| POST | /orders | Create order |
-| DELETE | /orders/:id | Delete order |
-| PUT | /orders/:id | Update order |
-| GET | /mcp/tools | MCP tools |
-| GET | /health | Health check |
+| GET | `/ui` | Chat frontend |
+| GET | `/health` | Health check (includes MySQL connectivity) |
+| POST | `/query` | Send a message to the agent |
+| GET/POST | `/products` | List / add products |
+| GET/POST | `/orders` | List / create orders |
+| DELETE/PUT | `/orders/<order_id>` | Delete / update an order |
+| POST | `/razorpay/webhook` | Razorpay payment confirmation webhook |
+| GET | `/payments/<order_id>` | Payment attempt audit trail for an order |
+| GET | `/mcp/tools` | Tool manifest (descriptive only) |
 
-##  Setup
+## Known issues / TODO before shipping beyond local demo
 
-### Environment Variables
-
-MONGODB_URI=your_mongodb_connection_string
-DB_NAME=retail_db
-
-### Deploy to Cloud Run
-```bash
-gcloud run deploy google-rapid-agent-retail \
-  --source . \
-  --region europe-west1 \
-  --allow-unauthenticated \
-  --set-env-vars MONGODB_URI="your_uri",DB_NAME="retail_db"
-```
-
-### MongoDB MCP Server
-```
-npm install -g mongodb-mcp-server
-MDB_MCP_CONNECTION_STRING="your_mongodb_uri" mongodb-mcp-server
-```
-
-##  Hackathon Track
-**Brick-and-Mortar Retail** — Bridges digital convenience and physical retail:
-- Real-time inventory management
-- Automated order processing via natural language
-- Instant GST invoice generation
-- AI-powered store analytics & insights
-
-##  License
-MIT License
-
-
-## Important Note — Product Management
-
-Products can be added via:
-
-1. MongoDB Atlas (Direct)
-2. REST API → POST /products
-3. Postman / Any API Client
-4. Admin can add product through agent
-
-This is intentional security design.
-
-
-##  Future Scope
-- Razorpay payment gateway integration
-- Customer login/authentication
-- Multi-store support
-- WhatsApp bot integration
-- Email invoice delivery
-
-##  Payment Integration
-
-Agent generates GST invoice automatically.
-Payment gateway can be integrated as per 
-your region and preference:
-
-| Region | Recommended |
-|--------|-------------|
-| India  | Razorpay / PayU |
-| USA    | Stripe / PayPal |
-| Global | Stripe / Adyen |
-
-Plugin your preferred payment gateway
-to /orders endpoint for complete
-payment flow.
+- Add `razorpay` to `requirements.txt`.
+- Remove or clearly archive the dead `src/` files (old MongoDB/Agent Builder version) so they don't
+  confuse contributors or judges reading the repo.
+- Fix `src/config.py` — currently contains non-Python Markdown content, will fail to import as-is.
+- `vercel.json` and `Dockerfile` describe two different, currently-unused deployment paths — this
+  README covers local-only for now; pick one when you actually deploy.
